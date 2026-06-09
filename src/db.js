@@ -35,6 +35,16 @@ db.exec(`
     received_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_pending_lookup ON pending_images(conv_key, sender_id, received_at);
+
+  CREATE TABLE IF NOT EXISTS messages (
+    message_id  TEXT PRIMARY KEY,
+    conv_key    TEXT NOT NULL,
+    sender_id   TEXT,
+    text        TEXT NOT NULL,
+    is_bot      INTEGER NOT NULL DEFAULT 0,
+    received_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_key, received_at);
 `);
 
 const insertHistory = db.prepare(
@@ -109,4 +119,41 @@ export function takePendingImages(convKey, senderId, ttlMs) {
 
 export function pruneExpiredImages(ttlMs) {
   deleteExpiredImages.run(Date.now() - ttlMs);
+}
+
+const insertMessage = db.prepare(
+  "INSERT OR IGNORE INTO messages (message_id, conv_key, sender_id, text, is_bot, received_at) VALUES (?, ?, ?, ?, ?, ?)"
+);
+const selectMessageById = db.prepare(
+  "SELECT message_id, conv_key, sender_id, text, is_bot FROM messages WHERE message_id = ?"
+);
+const deleteOldMessages = db.prepare(
+  "DELETE FROM messages WHERE received_at <= ?"
+);
+
+export function recordMessage({ messageId, convKey, senderId, text, isBot }) {
+  insertMessage.run(
+    messageId,
+    convKey,
+    senderId ?? null,
+    text,
+    isBot ? 1 : 0,
+    Date.now()
+  );
+}
+
+export function getMessageById(messageId) {
+  const row = selectMessageById.get(messageId);
+  if (!row) return null;
+  return {
+    messageId: row.message_id,
+    convKey: row.conv_key,
+    senderId: row.sender_id,
+    text: row.text,
+    isBot: row.is_bot === 1,
+  };
+}
+
+export function pruneOldMessages(ttlMs) {
+  deleteOldMessages.run(Date.now() - ttlMs);
 }

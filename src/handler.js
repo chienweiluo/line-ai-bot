@@ -7,6 +7,9 @@ import {
   rememberFact,
   bufferImage,
   consumePendingImages,
+  storeIncomingMessage,
+  storeBotMessages,
+  lookupMessage,
 } from "./memory.js";
 import { buildPlacesCarousel } from "./flex.js";
 
@@ -74,7 +77,7 @@ function splitTextForLine(text) {
 
 async function reply(replyToken, payloads) {
   const messages = payloads.flat().slice(0, 5);
-  await lineClient.replyMessage({ replyToken, messages });
+  return await lineClient.replyMessage({ replyToken, messages });
 }
 
 const LINE_REPLY_MAX = 5;
@@ -132,14 +135,21 @@ export async function handleEvent(event) {
 
   if (event.message.type !== "text") return;
 
+  storeIncomingMessage(event);
+
+  const quotedId = event.message.quotedMessageId;
+  const quoted = quotedId ? lookupMessage(quotedId) : null;
+  const repliedToBot = quoted?.isBot === true;
+
   const src = event.source;
   const isGroup = src.type === "group" || src.type === "room";
-  if (isGroup && !botWasMentioned(event.message)) return;
+  const mentioned = botWasMentioned(event.message);
+  if (isGroup && !mentioned && !repliedToBot) return;
 
   const userText = stripMentions(event.message);
   const pendingImages = consumePendingImages(event).slice(0, MAX_IMAGES_PER_TURN);
 
-  if (!userText && pendingImages.length === 0) {
+  if (!userText && pendingImages.length === 0 && !quoted) {
     await reply(event.replyToken, [
       { type: "text", text: "你叫我但沒講話,有什麼想問的?" },
     ]);
@@ -155,16 +165,29 @@ export async function handleEvent(event) {
       facts,
       userText,
       images: pendingImages,
+      quoted,
       onFactSaved: (fact) => newFacts.push(fact),
     });
 
     for (const f of newFacts) rememberFact(event, f);
-    const storedUserText = pendingImages.length
-      ? `${userText || "(看圖)"} [附 ${pendingImages.length} 張圖]`
+    const tags = [];
+    if (pendingImages.length) tags.push(`附 ${pendingImages.length} 張圖`);
+    if (quoted) tags.push(`引用「${quoted.text.slice(0, 30)}...」`);
+    const storedUserText = tags.length
+      ? `${userText || "(看圖)"} [${tags.join(", ")}]`
       : userText;
     appendTurn(event, storedUserText, result.text);
 
-    await reply(event.replyToken, buildReplyPayloads(result));
+    const payloads = buildReplyPayloads(result);
+    if (event.message.quoteToken && payloads[0]?.type === "text") {
+      payloads[0] = { ...payloads[0], quoteToken: event.message.quoteToken };
+    }
+
+    const sendResult = await reply(event.replyToken, payloads);
+    const sentTexts = payloads.filter((p) => p.type === "text").map((p) => p.text);
+    if (sendResult?.sentMessages?.length) {
+      storeBotMessages(event, sendResult.sentMessages, sentTexts);
+    }
   } catch (err) {
     console.error("[handleEvent] failed:", err);
     try {

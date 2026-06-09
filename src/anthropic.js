@@ -138,8 +138,16 @@ const TOOLS = [
   },
 ];
 
-function buildUserContent(userText, images) {
-  if (!images?.length) return userText;
+function buildQuotedPrefix(quoted) {
+  if (!quoted?.text) return "";
+  const speaker = quoted.isBot ? "你之前說" : "另一個人說";
+  return `[使用者正在回覆 / 引用以下訊息]\n${speaker}:「${quoted.text}」\n\n[使用者的回覆]\n`;
+}
+
+function buildUserContent(userText, images, quoted) {
+  const prefix = buildQuotedPrefix(quoted);
+  const fullText = prefix + (userText || (images?.length ? "看一下這張圖" : ""));
+  if (!images?.length) return fullText;
   const blocks = images.map((img) => ({
     type: "image",
     source: {
@@ -148,14 +156,14 @@ function buildUserContent(userText, images) {
       data: Buffer.isBuffer(img.data) ? img.data.toString("base64") : img.data,
     },
   }));
-  blocks.push({ type: "text", text: userText || "看一下這張圖" });
+  blocks.push({ type: "text", text: fullText });
   return blocks;
 }
 
-export async function ask({ history, facts, userText, images, onFactSaved }) {
+export async function ask({ history, facts, userText, images, quoted, onFactSaved }) {
   const messages = [
     ...history,
-    { role: "user", content: buildUserContent(userText, images) },
+    { role: "user", content: buildUserContent(userText, images, quoted) },
   ];
   const systemPrompt = buildSystemPrompt(facts);
 
