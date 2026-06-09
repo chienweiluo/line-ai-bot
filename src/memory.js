@@ -11,10 +11,16 @@ import {
   recordMessage,
   getMessageById,
   pruneOldMessages,
+  addExpense,
+  getExpensesInRange,
+  getRecentExpenses,
+  removeExpense,
+  pruneOldExpenses,
 } from "./db.js";
 
 const IMAGE_TTL_MS = Number(process.env.IMAGE_TTL_MINUTES ?? 10) * 60 * 1000;
 const MESSAGE_TTL_MS = Number(process.env.MESSAGE_TTL_DAYS ?? 7) * 24 * 60 * 60 * 1000;
+const EXPENSE_TTL_MS = Number(process.env.EXPENSE_TTL_DAYS ?? 6) * 24 * 60 * 60 * 1000;
 
 const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT ?? 10);
 const TTL_MS = Number(process.env.HISTORY_TTL_MINUTES ?? 60) * 60 * 1000;
@@ -87,4 +93,26 @@ export function storeBotMessages(event, sentMessages, texts) {
 
 export function lookupMessage(messageId) {
   return getMessageById(messageId);
+}
+
+export function recordExpense(event, row) {
+  const id = addExpense({
+    convKey: convKey(event),
+    sourceMsgId: event.message?.id,
+    ...row,
+  });
+  pruneOldExpenses(EXPENSE_TTL_MS);
+  return id;
+}
+
+export function listExpensesInRange(event, since, until) {
+  return getExpensesInRange(convKey(event), since, until);
+}
+
+export function listRecentExpenses(event, limit = 10) {
+  return getRecentExpenses(convKey(event), limit);
+}
+
+export function deleteExpenseRecord(event, id) {
+  return removeExpense(convKey(event), id);
 }

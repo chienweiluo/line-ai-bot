@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { searchPlaces } from "./google_places.js";
+import { computeSettlements } from "./debts.js";
 
 const client = new Anthropic();
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
@@ -90,7 +91,19 @@ const BASE_PROMPT = `你是「${BOT_NAME}」,一位在東南亞跑跳超過十�
 - 一次性問題(「現在幾點」「天氣如何」)
 - 已經記過的事
 - 太瑣碎的(「我剛吃飽」)
-記完後簡短回應「OK 記下來了」之類的就好,不要把記下的東西整段複述。`;
+記完後簡短回應「OK 記下來了」之類的就好,不要把記下的東西整段複述。
+
+【你有記帳能力 (record_expense / query_expenses / delete_expense / compute_debts)】
+群組是「跟朋友旅遊記帳」的場景。
+- 使用者明確要記帳(「@bot 我午餐花了 200」)或要分帳(「我請大家喝 800」)→ 用 record_expense
+- 使用者問結算 / 算錢 / 誰欠誰 / 誰花最多 → 先用 query_expenses 取資料,需要算誰欠誰時用 compute_debts
+- 使用者要刪某筆(「剛才那筆刪掉」「取消上一筆」)→ 用 query_expenses 找到 → delete_expense
+- 使用者問「今天花了多少」「這趟總共多少」就直接幫他列 + 加總
+時間範圍解讀:
+- 「今天」:從當地時間 00:00 開始
+- 「這趟」「整趟」:預設過去 6 天(我們的 TTL),除非另有說明
+- 「昨天」「上週」:推算 ISO 時間
+回覆風格:列出來時用「①②③」加 emoji,不要 markdown。`;
 
 function buildSystemPrompt(facts) {
   if (!facts?.length) return BASE_PROMPT;
@@ -136,6 +149,73 @@ const TOOLS = [
       required: ["fact"],
     },
   },
+  {
+    name: "record_expense",
+    description:
+      "把一筆花費存進資料庫。使用者明確報帳或描述付了某筆錢時用。預設付款人 = 訊息發送者。",
+    input_schema: {
+      type: "object",
+      properties: {
+        amount: { type: "number", description: "金額(純數字)" },
+        currency: {
+          type: "string",
+          description: "幣別 ISO 代碼,例 THB / TWD / USD / JPY。沒講就預設 THB(泰國旅遊情境)。",
+        },
+        item: { type: "string", description: "花在什麼,簡短描述(例:午餐、按摩、計程車)" },
+        split: {
+          type: "string",
+          enum: ["self", "split_equal", "paid_for_others"],
+          description: "self = 個人花費;split_equal = 付款人和 other_names 平分;paid_for_others = 付款人代付給 other_names",
+        },
+        other_names: {
+          type: "array",
+          items: { type: "string" },
+          description: "split 涉及的其他人名/暱稱(從訊息文字看到的)。__all__ 代表「大家」。",
+        },
+        payer_name: {
+          type: "string",
+          description: "明確指定付款人名字(預設是訊息發送者,僅在使用者說『X 付的』時使用)",
+        },
+      },
+      required: ["amount", "currency", "item", "split"],
+    },
+  },
+  {
+    name: "query_expenses",
+    description:
+      "查詢花費記錄。可指定時間範圍(unix ms)。不指定就回最近 N 筆。最多 6 天內(這是 TTL)。",
+    input_schema: {
+      type: "object",
+      properties: {
+        since: { type: "number", description: "起始 unix ms(包含)" },
+        until: { type: "number", description: "結束 unix ms(包含)" },
+        recent_limit: { type: "number", description: "若不指定 since/until,回最近 N 筆,預設 20" },
+      },
+    },
+  },
+  {
+    name: "delete_expense",
+    description: "刪除一筆花費,需要 id(從 query_expenses 拿)。",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "要刪除的 expense id" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "compute_debts",
+    description:
+      "依照指定範圍內的花費,計算最少 transfer 的「誰該付誰多少」清單。同幣別會分組。",
+    input_schema: {
+      type: "object",
+      properties: {
+        since: { type: "number", description: "起始 unix ms" },
+        until: { type: "number", description: "結束 unix ms" },
+      },
+    },
+  },
 ];
 
 function buildQuotedPrefix(quoted) {
@@ -160,7 +240,7 @@ function buildUserContent(userText, images, quoted) {
   return blocks;
 }
 
-export async function ask({ history, facts, userText, images, quoted, onFactSaved }) {
+export async function ask({ history, facts, userText, images, quoted, onFactSaved, expenseOps }) {
   const messages = [
     ...history,
     { role: "user", content: buildUserContent(userText, images, quoted) },
@@ -214,6 +294,34 @@ export async function ask({ history, facts, userText, images, quoted, onFactSave
             type: "tool_result",
             tool_use_id: tu.id,
             content: fact ? "saved" : "empty fact, nothing saved",
+          });
+        } else if (tu.name === "record_expense" && expenseOps?.record) {
+          const id = expenseOps.record(tu.input);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({ id, status: "recorded" }),
+          });
+        } else if (tu.name === "query_expenses" && expenseOps?.query) {
+          const rows = expenseOps.query(tu.input);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify(rows),
+          });
+        } else if (tu.name === "delete_expense" && expenseOps?.delete) {
+          const ok = expenseOps.delete(tu.input);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: ok ? "deleted" : "not found",
+          });
+        } else if (tu.name === "compute_debts" && expenseOps?.compute) {
+          const settlements = expenseOps.compute(tu.input);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify(settlements),
           });
         } else {
           toolResults.push({

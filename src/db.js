@@ -45,6 +45,26 @@ db.exec(`
     received_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_key, received_at);
+
+  CREATE TABLE IF NOT EXISTS expenses (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_key      TEXT NOT NULL,
+    payer_id      TEXT NOT NULL,
+    payer_name    TEXT,
+    amount        REAL NOT NULL,
+    currency      TEXT NOT NULL,
+    item          TEXT,
+    participants  TEXT,
+    source_msg_id TEXT,
+    created_at    INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_expenses_conv_time ON expenses(conv_key, created_at);
+
+  CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id      TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
 `);
 
 const insertHistory = db.prepare(
@@ -156,4 +176,80 @@ export function getMessageById(messageId) {
 
 export function pruneOldMessages(ttlMs) {
   deleteOldMessages.run(Date.now() - ttlMs);
+}
+
+const insertExpense = db.prepare(
+  `INSERT INTO expenses (conv_key, payer_id, payer_name, amount, currency, item, participants, source_msg_id, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const selectExpensesRange = db.prepare(
+  "SELECT id, conv_key, payer_id, payer_name, amount, currency, item, participants, source_msg_id, created_at FROM expenses WHERE conv_key = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC"
+);
+const selectRecentExpenses = db.prepare(
+  "SELECT id, conv_key, payer_id, payer_name, amount, currency, item, participants, source_msg_id, created_at FROM expenses WHERE conv_key = ? ORDER BY created_at DESC LIMIT ?"
+);
+const deleteExpense = db.prepare("DELETE FROM expenses WHERE id = ? AND conv_key = ?");
+const deleteOldExpenses = db.prepare("DELETE FROM expenses WHERE created_at <= ?");
+
+export function addExpense(row) {
+  const result = insertExpense.run(
+    row.convKey,
+    row.payerId,
+    row.payerName ?? null,
+    row.amount,
+    row.currency,
+    row.item ?? null,
+    row.participants ? JSON.stringify(row.participants) : null,
+    row.sourceMsgId ?? null,
+    Date.now()
+  );
+  return result.lastInsertRowid;
+}
+
+function rowToExpense(r) {
+  return {
+    id: r.id,
+    convKey: r.conv_key,
+    payerId: r.payer_id,
+    payerName: r.payer_name,
+    amount: r.amount,
+    currency: r.currency,
+    item: r.item,
+    participants: r.participants ? JSON.parse(r.participants) : null,
+    sourceMsgId: r.source_msg_id,
+    createdAt: r.created_at,
+  };
+}
+
+export function getExpensesInRange(convKey, since, until) {
+  return selectExpensesRange.all(convKey, since, until).map(rowToExpense);
+}
+
+export function getRecentExpenses(convKey, limit = 10) {
+  return selectRecentExpenses.all(convKey, limit).map(rowToExpense);
+}
+
+export function removeExpense(convKey, id) {
+  return deleteExpense.run(id, convKey).changes > 0;
+}
+
+export function pruneOldExpenses(ttlMs) {
+  deleteOldExpenses.run(Date.now() - ttlMs);
+}
+
+const upsertProfile = db.prepare(
+  "INSERT INTO user_profiles (user_id, display_name, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at"
+);
+const selectProfile = db.prepare(
+  "SELECT user_id, display_name, updated_at FROM user_profiles WHERE user_id = ?"
+);
+
+export function saveProfile(userId, displayName) {
+  upsertProfile.run(userId, displayName, Date.now());
+}
+
+export function getProfile(userId) {
+  const row = selectProfile.get(userId);
+  if (!row) return null;
+  return { userId: row.user_id, displayName: row.display_name, updatedAt: row.updated_at };
 }
