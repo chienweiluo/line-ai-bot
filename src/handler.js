@@ -245,12 +245,12 @@ export async function handleEvent(event) {
     await reply(event.replyToken, [
       {
         type: "text",
-        text: `大家好,我是 ${process.env.BOT_NAME || "AI 助手"} 🛺
-我會聊泰國旅遊,在群裡 @我 問問題即可。
-📸 傳圖給我看 (菜單/景點/收據都行) → 之後 @我 加問題,我就會看圖回答
+        text: `欸大家好,我是 ${process.env.BOT_NAME || "AI 助手"} 🤖
+在群裡 @我 就能問任何事 — 旅遊、程式、生活、八卦、查資料都行,泰國 / 東南亞特別熟 🌴
+📸 傳圖也可以 (菜單/景點/收據/截圖) → 之後 @我 加問題,我會看圖回答
 🧾 群裡有人講花費或傳收據,我會自動記下來,結算時 @我 「算今天」就會列出來
 
-試試看「@我 曼谷有什麼好吃 pad thai」🍤`,
+試試:「@我 推薦曼谷必吃」「@我 解釋什麼是 closure」「@我 翻譯這個截圖」`,
       },
     ]);
     return;

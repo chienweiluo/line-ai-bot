@@ -16,7 +16,7 @@ export function looksLikeExpense(text) {
 
 const TEXT_SYSTEM = `You extract expense info from LINE group-chat messages.
 
-The sender is in Thailand on holiday by default; if no currency is mentioned, assume ${DEFAULT_CURRENCY}.
+If no currency is mentioned in the message, assume ${DEFAULT_CURRENCY}.
 
 Decide if the message states an expense the SENDER paid (or someone they name). If yes, extract structured info. Return JSON only — no prose.
 
